@@ -20,6 +20,7 @@ from . import InfSectionParser
 from . import GenC
 from . import GenMake
 from . import GenDepex
+from . import GenCoSWID
 from io import BytesIO
 from GenPatchPcdTable.GenPatchPcdTable import parsePcdInfoFromMapFile
 from Workspace.MetaFileCommentParser import UsageList
@@ -1738,6 +1739,11 @@ class ModuleAutoGen(AutoGen):
         MakefilePath = os.path.join(self.MakeFileDir, MakefileName)
         FilePath = path.join(self.BuildDir, self.Name + ".makefile")
         SaveFileOnChange(FilePath, MakefilePath, False)
+
+    def CreateCoSWIDFile(self):
+        coSWID = GenCoSWID.ModuleCoSWID(self)
+        coSWID.Generate()
+        SaveFileOnChange(coSWID.FilePath, coSWID.content, False)
 
     def CopyBinaryFiles(self):
         for File in self.Module.Binaries:

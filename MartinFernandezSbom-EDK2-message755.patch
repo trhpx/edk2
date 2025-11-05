@@ -1,0 +1,193 @@
+Signed-off-by: Martin Fernandez <martin.fernandez@...>
+---
+ BaseTools/Conf/build_rule.template            | 10 +++++
+ .../Source/Python/AutoGen/AutoGenWorker.py    |  1 +
+ BaseTools/Source/Python/AutoGen/GenCoSWID.py  | 41 +++++++++++++++++++
+ .../Source/Python/AutoGen/ModuleAutoGen.py    |  6 +++
+ BaseTools/Source/Python/build/build.py        |  1 +
+ scripts/edition.sh                            | 20 +++++++++
+ 6 files changed, 79 insertions(+)
+ create mode 100644 BaseTools/Source/Python/AutoGen/GenCoSWID.py
+ create mode 100755 scripts/edition.sh
+
+diff --git a/BaseTools/Conf/build_rule.template b/BaseTools/Conf/build_rule.template
+index 5895b48fd8..080111fcf2 100755
+--- a/BaseTools/Conf/build_rule.template
++++ b/BaseTools/Conf/build_rule.template
+@@ -130,6 +130,7 @@
+ 
+     <Command.GCC>
+         "$(CC)" $(DEPS_FLAGS) $(CC_FLAGS) -c -o ${dst} $(INC) ${src}
++	echo ${src} >> $(OUTPUT_DIR)(+)${s_dir}(+)source_files.lst
+ 
+     <Command.XCODE>
+         "$(CC)" $(DEPS_FLAGS) $(CC_FLAGS) -o ${dst} $(INC) ${src}
+@@ -152,8 +153,10 @@
+         *.h, *.H
+ 
+     <OutputFile>
++        $(OUTPUT_DIR)(+)header_files.lst
+ 
+     <Command>
++	echo ${src} >> ${dst}
+ 
+ [Assembly-Code-File.COMMON.COMMON]
+     <InputFile.MSFT, InputFile.INTEL>
+@@ -173,6 +176,7 @@
+         "$(PP)" $(DEPS_FLAGS) $(PP_FLAGS) $(INC) ${src} > ${d_path}(+)${s_base}.ii
+         Trim --source-code --convert-hex --trim-long -o ${d_path}(+)${s_base}.iiii ${d_path}(+)${s_base}.ii
+         "$(ASM)" /Fo${dst} $(ASM_FLAGS) /I${s_path} $(INC) ${d_path}(+)${s_base}.iiii
++	echo ${src} >> $(OUTPUT_DIR)(+)${s_dir}(+)source_files.lst
+ 
+     <Command.GCC>
+         Trim --asm-file -o ${d_path}(+)${s_base}.i -i $(INC_LIST) ${src}
+@@ -227,6 +231,7 @@
+         "$(PP)" $(DEPS_FLAGS) $(PP_FLAGS) $(INC) ${src} > ${d_path}(+)${s_base}.ii
+         Trim --trim-long --source-code -o ${d_path}(+)${s_base}.iii ${d_path}(+)${s_base}.ii
+         "$(NASM)" -I${s_path}(+) $(NASM_INC) $(NASM_FLAGS) -o $dst ${d_path}(+)${s_base}.iii
++	echo ${src} >> $(OUTPUT_DIR)(+)${s_dir}(+)source_files.lst
+ 
+ [Device-Tree-Source-File]
+     <InputFile>
+@@ -340,6 +345,9 @@
+     <InputFile>
+         ?.dll
+ 
++    <ExtraDependency>
++	$(OUTPUT_DIR)(+)header_files.lst
++
+     <OutputFile>
+         $(OUTPUT_DIR)(+)$(MODULE_NAME).efi
+         $(DEBUG_DIR)(+)$(MODULE_NAME).efi
+@@ -362,6 +370,8 @@
+         -$(CP) $(DEBUG_DIR)(+)$(MODULE_NAME).debug $(BIN_DIR)(+)$(MODULE_NAME_GUID).debug
+ 
+         "$(GENFW)" -e $(MODULE_TYPE) -o ${dst} ${src} $(GENFW_FLAGS)
++	bash $(WORKSPACE)(+)scripts(+)edition.sh $(OUTPUT_DIR) $(MODULE_NAME)
++	uswid --verbose --load $(WORKSPACE)(+)Conf(+)sbom.ini --load $(MODULE_NAME).ini --load $(OUTPUT_DIR)(+)$(MODULE_NAME).ini --save ${dst}
+         $(CP) ${dst} $(DEBUG_DIR)
+         $(CP) ${dst} $(BIN_DIR)(+)$(MODULE_NAME_GUID).efi
+         -$(CP) $(DEBUG_DIR)(+)*.map $(OUTPUT_DIR)
+diff --git a/BaseTools/Source/Python/AutoGen/AutoGenWorker.py b/BaseTools/Source/Python/AutoGen/AutoGenWorker.py
+index 0ba2339bed..4697dcfb0c 100755
+--- a/BaseTools/Source/Python/AutoGen/AutoGenWorker.py
++++ b/BaseTools/Source/Python/AutoGen/AutoGenWorker.py
+@@ -282,6 +282,7 @@ class AutoGenWorkerInProcess(mp.Process):
+ 
+                 Ma.CreateCodeFile(False)
+                 Ma.CreateMakeFile(False,GenFfsList=FfsCmd.get((Ma.MetaFile.Path, Ma.Arch),[]))
++                Ma.CreateCoSWIDFile()
+                 Ma.CreateAsBuiltInf()
+                 if GlobalData.gBinCacheSource and CommandTarget in [None, "", "all"]:
+                     try:
+diff --git a/BaseTools/Source/Python/AutoGen/GenCoSWID.py b/BaseTools/Source/Python/AutoGen/GenCoSWID.py
+new file mode 100644
+index 0000000000..65dec0c773
+--- /dev/null
++++ b/BaseTools/Source/Python/AutoGen/GenCoSWID.py
+@@ -0,0 +1,41 @@
++from os import path
++import subprocess
++
++
++class ModuleCoSWID(object):
++    '''Create a per-module ini file with SBOM related data
++
++    Also try to get the git HEAD commit hash if the project is
++    versioned by git
++    '''
++    def __init__(self, ModuleAutoGen):
++        self.Name = ModuleAutoGen.Name
++        self.Guid = ModuleAutoGen.Guid
++        self.Version = ModuleAutoGen.Version
++
++        self.colloquial_version = None
++        try:
++            process = subprocess.run(["git", "rev-parse", "HEAD"],
++                                     capture_output=True,
++                                     check=True)
++            self.colloquial_version = process.stdout.decode("utf-8").strip()
++        # If either git is not in the system, the tree is not in a
++        # git repo or anything else just don't fail
++        except:
++            pass
++
++        self.FilePath = path.join(ModuleAutoGen.BuildDir, self.Name + ".ini")
++
++        self.content = None
++
++    def Generate(self):
++        self.content = "\n".join([
++            "[uSWID]",
++            f"tag-id = {self.Guid}",
++            f"software-name = {self.Name}",
++            f"software-version = {self.Version}",
++            ""
++        ])
++
++        if self.colloquial_version is not None:
++            self.content += f"colloquial-version = {self.colloquial_version}\n"
+diff --git a/BaseTools/Source/Python/AutoGen/ModuleAutoGen.py b/BaseTools/Source/Python/AutoGen/ModuleAutoGen.py
+index d05410b329..6588322e78 100755
+--- a/BaseTools/Source/Python/AutoGen/ModuleAutoGen.py
++++ b/BaseTools/Source/Python/AutoGen/ModuleAutoGen.py
+@@ -20,6 +20,7 @@ from . import InfSectionParser
+ from . import GenC
+ from . import GenMake
+ from . import GenDepex
++from . import GenCoSWID
+ from io import BytesIO
+ from GenPatchPcdTable.GenPatchPcdTable import parsePcdInfoFromMapFile
+ from Workspace.MetaFileCommentParser import UsageList
+@@ -1784,6 +1785,11 @@ class ModuleAutoGen(AutoGen):
+         FilePath = path.join(self.BuildDir, self.Name + ".makefile")
+         SaveFileOnChange(FilePath, MakefilePath, False)
+ 
++    def CreateCoSWIDFile(self):
++        coSWID = GenCoSWID.ModuleCoSWID(self)
++        coSWID.Generate()
++        SaveFileOnChange(coSWID.FilePath, coSWID.content, False)
++
+     def CopyBinaryFiles(self):
+         for File in self.Module.Binaries:
+             SrcPath = File.Path
+diff --git a/BaseTools/Source/Python/build/build.py b/BaseTools/Source/Python/build/build.py
+index 07187c0361..a80363acba 100755
+--- a/BaseTools/Source/Python/build/build.py
++++ b/BaseTools/Source/Python/build/build.py
+@@ -870,6 +870,7 @@ class Build():
+ 
+                     PcdMa.CreateCodeFile(False)
+                     PcdMa.CreateMakeFile(False,GenFfsList = DataPipe.Get("FfsCommand").get((PcdMa.MetaFile.Path, PcdMa.Arch),[]))
++                    PcdMa.CreateCoSWIDFile()
+                     PcdMa.CreateAsBuiltInf()
+                     # Force cache miss for PCD driver
+                     if GlobalData.gBinCacheSource and self.Target in [None, "", "all"]:
+diff --git a/scripts/edition.sh b/scripts/edition.sh
+new file mode 100755
+index 0000000000..00de646a6f
+--- /dev/null
++++ b/scripts/edition.sh
+@@ -0,0 +1,20 @@
++#!/bin/bash
++
++set -xe -o pipefail
++
++output_dir="${1:?}"
++module_name="${2:?}"
++
++edition="$(cat "${output_dir}/source_files.lst" "${output_dir}/header_fi=les.lst" | \
++	      tr ' ' '\n' | \
++	      sort -u | \
++	      tee "${module_name}.files" | \
++	      xargs cat | \
++	      sha256sum | \
++	      cut -d' ' -f 1)"
++
++cat <<EOF > "${output_dir}/${module_name}.ini"
++[uSWID]
++edition = ${edition}
++EOF
++
+--=20
+2.30.2
