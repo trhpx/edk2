@@ -5,7 +5,7 @@ set -xe -o pipefail
 output_dir="${1:?}"
 module_name="${2:?}"
 
-edition="$(cat "${output_dir}/source_files.lst" "${output_dir}/header_fi=les.lst" | \
+edition="$(cat "${output_dir}/source_files.lst" "${output_dir}/header_files.lst" | \
 	      tr ' ' '\n' | \
 	      sort -u | \
 	      tee "${module_name}.files" | \
