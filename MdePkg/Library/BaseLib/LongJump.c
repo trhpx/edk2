@@ -25,6 +25,7 @@
 
 **/
 VOID
+NORETURN
 EFIAPI
 LongJump (
   IN      BASE_LIBRARY_JUMP_BUFFER  *JumpBuffer,
